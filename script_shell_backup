@@ -1,0 +1,124 @@
+#!/bin/bash
+
+# PARAMETRES
+
+MAIL_TO="fatnassikhouloud1994@gmail.com" # Définir le mail à envoyer
+BACKUP_DIR="/backups/site_backups"  # Dossier de sauvegarde
+
+DUMP_MYSQL=true
+TAR_SITES=false
+
+KEEP_MYSQL="7" # 7 Jours = Semaines
+KEEP_SITES="7" # 7 Jours = Semaines
+
+MYSQL_HOST="localhost"
+MYSQL_USER="root"
+MYSQL_PASS=""
+MYSQL_BACKUP_DIR="$BACKUP_DIR/mysql/"
+
+SITES_DIR="/var/www/sites/" # Dossier principale du site
+
+SITES_BACKUP_DIR="$BACKUP_DIR/sites/"
+
+THE_DATE="$(date '+%Y-%m-%d')"
+
+MYSQL_PATH="$(which mysql)"
+MYSQLDUMP_PATH="$(which mysqldump)"
+FIND_PATH="$(which find)"
+TAR_PATH="$(which tar)"
+RSYNC_PATH="$(which rsync)"
+
+# PARAMETRES
+
+echo "Date de Sauvegarde : $(date)"
+
+# Vérifier l'espace disque
+FREE=`df --output=avail -h "$PWD" | sed '1d;s/[^0-9]//g'`
+if [ $FREE -lt 5 ] 
+  then
+    # < 5gb donc ceci n'est pas suffisant
+    mail -s "Alert: Almost out of disk space $usep%" $MAIL_TO
+    exit 0
+fi
+
+# Céer les dossiers
+if [[ ! -d $BACKUP_DIR ]]
+  then
+  mkdir -p "$BACKUP_DIR"
+  chmod 700 "$BACKUP_DIR"
+fi
+if [[ ! -d $MYSQL_BACKUP_DIR ]]
+  then
+  mkdir -p "$MYSQL_BACKUP_DIR"
+fi
+if [[ ! -d $SITES_BACKUP_DIR ]]
+  then
+  mkdir -p "$SITES_BACKUP_DIR"
+fi
+
+if [ "$DUMP_MYSQL" = "true" ]
+  then
+
+  # Exporter et sauvgarder tous les bases de données
+  echo "------------------------------------"
+  DBS="$($MYSQL_PATH -h $MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS -Bse 'show databases')"
+  for db in $DBS
+  do
+    if [[ $db != "information_schema" && $db != "mysql" && $db != "performance_schema" ]]
+      then
+      echo "En cours de sauvegarde: $db..."
+      $MYSQLDUMP_PATH --opt --skip-add-locks -h $MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS $db | gzip > $MYSQL_BACKUP_DIR$db\_$THE_DATE.sql.gz
+      # Vérifier l'exuction de l'instrcution 
+      if [ $? -eq 0 ]
+        then
+                # echo "Succés"
+        else
+                mail -s "Erreur lors la sauvegarde" $MAIL_TO < err.log
+      fi
+    
+    fi
+  done
+
+
+  # Supprimer les autres sauvegardes
+  echo "------------------------------------"
+  echo "Suppression les autres sauvegardes..."
+  $FIND_PATH $MYSQL_BACKUP_DIR*.sql.gz -mtime +$KEEP_MYSQL
+  $FIND_PATH $MYSQL_BACKUP_DIR*.sql.gz -mtime +$KEEP_MYSQL -exec rm {} +
+
+fi
+
+if [ "$TAR_SITES" == "true" ]
+  then
+
+  # Lister tous les fichiers et les zipper
+  echo "------------------------------------"
+  cd $SITES_DIR
+  for d in *
+  do
+    echo "Créer des archives $d..."
+    # Ne pas archiver logs/tmp/.git
+    $TAR_PATH --exclude="*/log" --exclude='*/.git' --exclude="/tmp" -C $SITES_DIR -czf $SITES_BACKUP_DIR/$d\_$THE_DATE.tgz $d
+    # Vérifier l'exuction de l'instrcution 
+    if [ $? -eq 0 ]
+      then
+            # echo "Succés"
+      else
+            mail -s "Erreur lors du sauvegarde" $MAIL_TO < err.log
+    fi
+
+  done
+  
+
+  echo "------------------------------------"
+  echo "Suppression des autres archives..."
+  $FIND_PATH $SITES_BACKUP_DIR*.tgz -mtime +$KEEP_SITES
+  $FIND_PATH $SITES_BACKUP_DIR*.tgz -mtime +$KEEP_SITES -exec rm {} +
+
+fi
+
+
+echo "------------------------------------"
+echo "Sauvgarde terminé : $(date)"
+# Envoyer un email lorsque le code compléte
+mail -s "Sauvgarde Terminé" $MAIL_TO <<< "Le sauvegarde a été terminé avec succés"
